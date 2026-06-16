@@ -1,0 +1,53 @@
+name: Build and Push Frontend
+
+on:
+  push:
+    branches: [main]
+
+env:
+  ECR_REGISTRY: 569085067591.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_REPOSITORY: uat-frontend
+  IMAGE_TAG: ${{ github.sha }}  # unique tag per commit - never overwrite old images
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build Docker image
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+                     $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Push to ECR
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Update Helm values in config repo
+        run: |
+          # Updates the image tag in sample-app-config repo
+          # ArgoCD watches that repo and auto-deploys the new tag
+          git clone https://x-access-token:${{ secrets.CONFIG_REPO_TOKEN }}@github.com/phsangam/sample-app-config.git
+          cd sample-app-config
+          sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|" helm/frontend/values.yaml
+          git config user.email "github-actions@ci.com"
+          git config user.name "GitHub Actions"
+          git add .
+          git commit -m "Update frontend image tag to $IMAGE_TAG"
+          git push
